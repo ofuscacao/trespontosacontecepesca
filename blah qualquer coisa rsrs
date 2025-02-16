@@ -1,0 +1,142 @@
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:FindFirstChild("PlayerGui")
+local fishingGui = playerGui and playerGui:FindFirstChild("FishingGui")  -- Adjust if needed
+local Fish_Button = fishingGui and fishingGui:FindFirstChild("Fish_Button")  -- Ensure correct path
+
+local autoFishingEnabled = false
+local insideSafeZone = false
+local isFishing = false
+local waitingForBuoy = false
+local lastReelTime = 0
+
+local function ChangeToggleColor(button)
+    if autoFishingEnabled then
+        button.BackgroundColor3 = Color3.fromRGB(0, 255, 0)  -- Green when enabled
+        button.Text = "Auto Fishing: ON"
+    else
+        button.BackgroundColor3 = Color3.fromRGB(255, 0, 0)  -- Red when disabled
+        button.Text = "Auto Fishing: OFF"
+    end
+end
+
+local function reelIn()
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+    wait(0.1)
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+end
+
+local function castRod()
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+    wait(0.1)
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+end
+
+local function isBuoyPresent()
+    local temp = workspace:FindFirstChild("Temp")
+    return temp and temp:FindFirstChild("874610987.buoy")
+end
+
+if Fish_Button then
+    Fish_Button.MouseButton1Click:Connect(function()
+        autoFishingEnabled = not autoFishingEnabled
+        ChangeToggleColor(Fish_Button)
+
+        if autoFishingEnabled then
+            if not isBuoyPresent() then
+                reelIn()
+                wait(2)
+                if not isBuoyPresent() then
+                    castRod()
+                end
+            end
+        else
+            if isBuoyPresent() then
+                reelIn()
+            end
+            isFishing = false
+            waitingForBuoy = false
+        end
+    end)
+    -- Initialize button state
+    ChangeToggleColor(Fish_Button)
+end
+
+task.spawn(function()
+    while true do
+        wait(30)
+        if autoFishingEnabled and not isBuoyPresent() then
+            print("⚠ 30-second failsafe activated! No buoy detected, casting rod...")
+            castRod()
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if autoFishingEnabled then
+        local fishingGui = workspace:FindFirstChild("fishing")
+        local buoy = isBuoyPresent()
+        if fishingGui then
+            isFishing = true
+            waitingForBuoy = false
+        end
+        if isFishing and fishingGui then
+            local bar = fishingGui:FindFirstChild("bar")
+            local indicator = bar and bar:FindFirstChild("indicator")
+            local safeZone = bar and bar:FindFirstChild("safeArea")
+            if indicator and safeZone then
+                local earlyClickOffset = 0.065
+                local indicatorY = indicator.Position.Y.Scale
+                local safeZoneY = safeZone.Position.Y.Scale
+                local safeZoneHeight = safeZone.Size.Y.Scale
+                local safeZoneBottom = safeZoneY + safeZoneHeight
+                local nearTopEdge = indicatorY <= safeZoneY + earlyClickOffset
+                local nearBottomEdge = indicatorY >= safeZoneBottom - earlyClickOffset
+                if indicatorY > safeZoneBottom then
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                    wait(0.05)
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                    return
+                end
+                if nearTopEdge or nearBottomEdge then
+                    if not insideSafeZone then
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                        wait(0.05)
+                        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                        insideSafeZone = true
+                    end
+                else
+                    insideSafeZone = false
+                end
+            end
+        end
+        if isFishing and not buoy and not waitingForBuoy then
+            if tick() - lastReelTime >= 3 then
+                lastReelTime = tick()
+                wait(1)
+                reelIn()
+                isFishing = false
+                waitingForBuoy = true
+
+                task.spawn(function()
+                    local startTime = tick()
+                    while waitingForBuoy do
+                        if isBuoyPresent() then
+                            waitingForBuoy = false
+                            return
+                        end
+                        if tick() - startTime >= 5 then
+                            reelIn()
+                            waitingForBuoy = false
+                            return
+                        end
+                        wait(0.5)
+                    end
+                end)
+            end
+        end
+    end
+end)
